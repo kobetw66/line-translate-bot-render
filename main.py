@@ -39,11 +39,10 @@ def translate_text(text):
         instructions="""
 你是 LINE 中文↔印尼文雙向翻譯助手。
 
-請自動判斷使用者輸入的語言：
-
-1. 如果輸入是繁體中文或簡體中文，請翻譯成自然、口語、禮貌的印尼文。
-2. 如果輸入是印尼文，請翻譯成自然、口語、禮貌的繁體中文。
-3. 如果中印尼文混合，請依主要語言判斷翻譯方向。
+規則：
+1. 中文翻成自然、口語、禮貌的印尼文。
+2. 印尼文翻成自然、口語、禮貌的繁體中文。
+3. 中印尼文混合時，依主要語言判斷翻譯方向。
 4. 只輸出翻譯結果。
 5. 不要解釋、不要加標題、不要加括號。
 6. 適合家庭、長輩、外籍看護日常溝通使用。
@@ -89,29 +88,39 @@ def callback():
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text_message(event):
     user_text = event.message.text.strip()
+
+    if not user_text:
+        return
+
     translated = translate_text(user_text)
     reply_text(event.reply_token, translated)
 
 
 @handler.add(MessageEvent, message=AudioMessageContent)
 def handle_audio_message(event):
-    with ApiClient(configuration) as api_client:
-        blob_api = MessagingApiBlob(api_client)
-        audio_content = blob_api.get_message_content(event.message.id)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as temp_audio:
-            temp_audio.write(audio_content)
-            temp_audio_path = temp_audio.name
+    temp_audio_path = None
 
     try:
+        with ApiClient(configuration) as api_client:
+            blob_api = MessagingApiBlob(api_client)
+            audio_content = blob_api.get_message_content(event.message.id)
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as temp_audio:
+                temp_audio.write(audio_content.data)
+                temp_audio_path = temp_audio.name
+
         transcript_text = transcribe_audio(temp_audio_path)
         translated = translate_text(transcript_text)
 
         reply = f"語音辨識：{transcript_text}\n\n翻譯：{translated}"
         reply_text(event.reply_token, reply)
 
+    except Exception as e:
+        print("Audio error:", e)
+        reply_text(event.reply_token, "語音翻譯失敗，請再試一次。")
+
     finally:
-        if os.path.exists(temp_audio_path):
+        if temp_audio_path and os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
 
 
