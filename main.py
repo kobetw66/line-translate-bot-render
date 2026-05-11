@@ -1,4 +1,5 @@
 import os
+import tempfile
 from flask import Flask, request, abort
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -8,10 +9,15 @@ from linebot.v3.messaging import (
     Configuration,
     ApiClient,
     MessagingApi,
+    MessagingApiBlob,
     ReplyMessageRequest,
     TextMessage
 )
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.webhooks import (
+    MessageEvent,
+    TextMessageContent,
+    AudioMessageContent
+)
 from linebot.v3.exceptions import InvalidSignatureError
 
 load_dotenv()
@@ -24,7 +30,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
@@ -45,8 +50,27 @@ def translate_text(text):
 """,
         input=text
     )
-
     return response.output_text.strip()
+
+
+def transcribe_audio(file_path):
+    with open(file_path, "rb") as audio_file:
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file
+        )
+    return transcript.text.strip()
+
+
+def reply_text(reply_token, text):
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[TextMessage(text=text)]
+            )
+        )
 
 
 @app.route("/callback", methods=["POST"])
@@ -63,22 +87,32 @@ def callback():
 
 
 @handler.add(MessageEvent, message=TextMessageContent)
-def handle_message(event):
-    user_text = event.message.text
-
+def handle_text_message(event):
+    user_text = event.message.text.strip()
     translated = translate_text(user_text)
+    reply_text(event.reply_token, translated)
 
+
+@handler.add(MessageEvent, message=AudioMessageContent)
+def handle_audio_message(event):
     with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
+        blob_api = MessagingApiBlob(api_client)
+        audio_content = blob_api.get_message_content(event.message.id)
 
-        line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=event.reply_token,
-                messages=[
-                    TextMessage(text=translated)
-                ]
-            )
-        )
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as temp_audio:
+            temp_audio.write(audio_content)
+            temp_audio_path = temp_audio.name
+
+    try:
+        transcript_text = transcribe_audio(temp_audio_path)
+        translated = translate_text(transcript_text)
+
+        reply = f"語音辨識：{transcript_text}\n\n翻譯：{translated}"
+        reply_text(event.reply_token, reply)
+
+    finally:
+        if os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
 
 
 @app.route("/")
