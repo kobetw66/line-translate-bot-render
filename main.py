@@ -98,6 +98,15 @@ def handle_text_message(event):
 
 @handler.add(MessageEvent, message=AudioMessageContent)
 def handle_audio_message(event):
+    duration_ms = event.message.duration
+
+    if duration_ms > 60000:
+        reply_text(
+            event.reply_token,
+            "語音超過60秒，請縮短後再試。"
+        )
+        return
+
     temp_audio_path = None
 
     try:
