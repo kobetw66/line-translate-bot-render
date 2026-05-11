@@ -32,6 +32,8 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+MAX_AUDIO_DURATION_MS = 60000
+
 
 def translate_text(text):
     response = client.responses.create(
@@ -92,24 +94,29 @@ def handle_text_message(event):
     if not user_text:
         return
 
-    translated = translate_text(user_text)
-    reply_text(event.reply_token, translated)
+    try:
+        translated = translate_text(user_text)
+        reply_text(event.reply_token, translated)
+    except Exception as e:
+        print("Text error:", e)
+        reply_text(event.reply_token, "文字翻譯失敗，請再試一次。")
 
 
 @handler.add(MessageEvent, message=AudioMessageContent)
 def handle_audio_message(event):
-    duration_ms = event.message.duration
-
-    if duration_ms > 60000:
-        reply_text(
-            event.reply_token,
-            "語音超過60秒，請縮短後再試。"
-        )
-        return
-
     temp_audio_path = None
 
     try:
+        duration_ms = getattr(event.message, "duration", 0)
+        print("Audio duration:", duration_ms)
+
+        if duration_ms and duration_ms >= MAX_AUDIO_DURATION_MS:
+            reply_text(
+                event.reply_token,
+                "語音超過60秒，請縮短後再試。"
+            )
+            return
+
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
             audio_content = blob_api.get_message_content(event.message.id)
@@ -119,6 +126,11 @@ def handle_audio_message(event):
                 temp_audio_path = temp_audio.name
 
         transcript_text = transcribe_audio(temp_audio_path)
+
+        if not transcript_text:
+            reply_text(event.reply_token, "沒有辨識到語音內容，請再試一次。")
+            return
+
         translated = translate_text(transcript_text)
 
         reply = f"語音辨識：{transcript_text}\n\n翻譯：{translated}"
