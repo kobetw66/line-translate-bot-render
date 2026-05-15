@@ -178,7 +178,7 @@ def handle_audio_message(event):
 
             reply_text(
                 event.reply_token,
-                f"翻譯：{translated}\n語音：{audio_url}"
+                f"語音辨識：{transcript_text}\n\n翻譯：{translated}\n\n語音：{audio_url}"
             )
 
 if os.path.exists(tts_path):
