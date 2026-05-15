@@ -40,14 +40,9 @@ def translate_text(text):
         model="gpt-4.1-mini",
         instructions="""
 你是 LINE 中文↔印尼文雙向翻譯助手。
-
-規則：
-1. 中文翻成自然、口語、禮貌的印尼文。
-2. 印尼文翻成自然、口語、禮貌的繁體中文。
-3. 中印尼文混合時，依主要語言判斷翻譯方向。
-4. 只輸出翻譯結果。
-5. 不要解釋、不要加標題、不要加括號。
-6. 適合家庭、長輩、外籍看護日常溝通使用。
+中文翻成印尼文，印尼文翻成繁體中文。
+只輸出翻譯結果，不要解釋。
+適合家庭、長輩、外籍看護日常溝通使用。
 """,
         input=text
     )
@@ -74,6 +69,23 @@ def reply_text(reply_token, text):
         )
 
 
+def save_line_audio(audio_content, temp_audio):
+    if isinstance(audio_content, (bytes, bytearray)):
+        temp_audio.write(audio_content)
+    elif hasattr(audio_content, "data"):
+        temp_audio.write(audio_content.data)
+    elif hasattr(audio_content, "read"):
+        temp_audio.write(audio_content.read())
+    elif hasattr(audio_content, "iter_content"):
+        for chunk in audio_content.iter_content():
+            if chunk:
+                temp_audio.write(chunk)
+    else:
+        for chunk in audio_content:
+            if chunk:
+                temp_audio.write(chunk)
+
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature")
@@ -89,14 +101,14 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text_message(event):
-    user_text = event.message.text.strip()
-
-    if not user_text:
-        return
-
     try:
+        user_text = event.message.text.strip()
+        if not user_text:
+            return
+
         translated = translate_text(user_text)
         reply_text(event.reply_token, translated)
+
     except Exception as e:
         print("Text error:", e)
         reply_text(event.reply_token, "文字翻譯失敗，請再試一次。")
@@ -111,10 +123,7 @@ def handle_audio_message(event):
         print("Audio duration:", duration_ms)
 
         if duration_ms and duration_ms >= MAX_AUDIO_DURATION_MS:
-            reply_text(
-                event.reply_token,
-                "語音超過60秒，請縮短後再試。"
-            )
+            reply_text(event.reply_token, "語音超過60秒，請縮短後再試。")
             return
 
         with ApiClient(configuration) as api_client:
@@ -122,8 +131,15 @@ def handle_audio_message(event):
             audio_content = blob_api.get_message_content(event.message.id)
 
             with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as temp_audio:
-                temp_audio.write(audio_content.data)
+                save_line_audio(audio_content, temp_audio)
                 temp_audio_path = temp_audio.name
+
+        file_size = os.path.getsize(temp_audio_path)
+        print("Audio file size:", file_size)
+
+        if file_size == 0:
+            reply_text(event.reply_token, "語音檔下載失敗，請再試一次。")
+            return
 
         transcript_text = transcribe_audio(temp_audio_path)
 
