@@ -3,6 +3,8 @@ import tempfile
 from flask import Flask, request, abort
 from dotenv import load_dotenv
 from openai import OpenAI
+import cloudinary
+import cloudinary.uploader
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import (
@@ -31,6 +33,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 client = OpenAI(api_key=OPENAI_API_KEY)
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET")
+)
 
 MAX_AUDIO_DURATION_MS = 60000
 
@@ -56,7 +63,21 @@ def transcribe_audio(file_path):
             file=audio_file
         )
     return transcript.text.strip()
+def generate_tts_audio(text, output_path):
 
+    response = client.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice="alloy",
+        input=text
+    )
+def upload_audio_to_cloudinary(file_path):
+    result = cloudinary.uploader.upload(
+        file_path,
+        resource_type="video"
+    )
+
+    return result["secure_url"]
+    response.stream_to_file(output_path)
 
 def reply_text(reply_token, text):
     with ApiClient(configuration) as api_client:
