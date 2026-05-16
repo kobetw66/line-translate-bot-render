@@ -3,6 +3,7 @@ import tempfile
 from flask import Flask, request, abort
 from dotenv import load_dotenv
 from openai import OpenAI
+from gtts import gTTS
 from mutagen.mp3 import MP3
 
 import cloudinary
@@ -44,18 +45,45 @@ cloudinary.config(
 def is_chinese(text):
     return any('\u4e00' <= ch <= '\u9fff' for ch in text)
 
-# ================= 翻譯 =================
+# ================= 翻譯（乾淨輸出）=================
 def translate_text(text):
     if is_chinese(text):
-        prompt = f"請翻譯成印尼文：{text}"
+        prompt = f"""
+你是翻譯機。
+請將以下中文翻譯成自然的印尼文。
+
+規則：
+1. 只輸出翻譯結果
+2. 不要加「翻譯是」
+3. 不要加引號
+4. 不要解釋
+5. 保持簡潔自然
+
+內容：
+{text}
+"""
     else:
-        prompt = f"請翻譯成繁體中文：{text}"
+        prompt = f"""
+你是翻譯機。
+請將以下印尼文翻譯成自然的繁體中文。
+
+規則：
+1. 只輸出翻譯結果
+2. 不要加「翻譯是」
+3. 不要加引號
+4. 不要解釋
+5. 保持簡潔自然
+
+內容：
+{text}
+"""
 
     response = client.responses.create(
         model="gpt-4o-mini",
         input=prompt
     )
-    return response.output_text.strip()
+
+    return response.output_text.strip().replace('"', '')
 
 # ================= 語音辨識 =================
 def transcribe_audio(file_path):
@@ -66,23 +94,15 @@ def transcribe_audio(file_path):
         )
     return result.text.strip()
 
-# ================= TTS =================
-from gtts import gTTS
-
+# ================= gTTS（免費語音）=================
 def generate_tts_audio(text, output_path):
-    try:
-        # 判斷語言
-        if any('\u4e00' <= ch <= '\u9fff' for ch in text):
-            lang = "zh-TW"
-        else:
-            lang = "id"
+    if is_chinese(text):
+        lang = "zh-TW"
+    else:
+        lang = "id"
 
-        tts = gTTS(text=text, lang=lang)
-        tts.save(output_path)
-
-    except Exception as e:
-        print("🔥 gTTS error:", str(e))
-        raise
+    tts = gTTS(text=text, lang=lang)
+    tts.save(output_path)
 
 # ================= Cloudinary =================
 def upload_audio(file_path):
@@ -117,15 +137,13 @@ def reply_audio(token, text, url, duration):
             )
         )
 
-# ================= 🔥 正確存 LINE 音訊（關鍵修正） =================
+# ================= 音訊儲存（穩定版）=================
 def save_line_audio(audio_content, file_path):
     if isinstance(audio_content, bytes):
         audio_bytes = audio_content
     else:
         audio_bytes = audio_content.read()
 
-    with open(file_path, "wb") as f:
-        f.write(audio_bytes)  # ✅ 關鍵：一次讀完整 bytes
     with open(file_path, "wb") as f:
         f.write(audio_bytes)
 
@@ -165,12 +183,9 @@ def handle_audio(event):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as f:
                 m4a_path = f.name
 
-        # 🔥 正確存音訊
         save_line_audio(content, m4a_path)
 
-        # 🔥 Whisper 直接吃 m4a（不用轉檔）
         text = transcribe_audio(m4a_path)
-
         translated = translate_text(text)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
