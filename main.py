@@ -39,6 +39,9 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 MAX_AUDIO_DURATION_MS = 60000
 
+# 🔥 自動記住 user
+USER_MEMORY = {}
+
 cloudinary.config(
     cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
     api_key=os.getenv("CLOUDINARY_API_KEY"),
@@ -50,15 +53,6 @@ cloudinary.config(
 def translate_text(text):
     response = client.responses.create(
         model="gpt-4.1-mini",
-        instructions="""
-你是 LINE 中文↔印尼文雙向翻譯助手。
-
-規則：
-1. 中文翻成自然、口語、禮貌的印尼文。
-2. 印尼文翻成自然、口語、禮貌的繁體中文。
-3. 自動判斷語言方向。
-4. 只輸出翻譯結果。
-""",
         input=text
     )
     return response.output_text.strip()
@@ -103,8 +97,7 @@ def upload_audio_to_cloudinary(file_path):
 # ================= 回覆 =================
 def reply_text(reply_token, text):
     with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
-        line_bot_api.reply_message(
+        MessagingApi(api_client).reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
                 messages=[TextMessage(text=text)]
@@ -112,10 +105,42 @@ def reply_text(reply_token, text):
         )
 
 
+# 🔥 真正 mention（穩定版）
+def reply_with_mention(reply_token, name, translated_text):
+    user_id = USER_MEMORY.get(name)
+
+    message_text = f"@{name}\n{translated_text}"
+
+    if not user_id:
+        return reply_text(reply_token, message_text)
+
+    mention = {
+        "mentionees": [
+            {
+                "index": 0,
+                "length": len(f"@{name}"),
+                "userId": user_id
+            }
+        ]
+    }
+
+    with ApiClient(configuration) as api_client:
+        MessagingApi(api_client).reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[
+                    TextMessage(
+                        text=message_text,
+                        mention=mention
+                    )
+                ]
+            )
+        )
+
+
 def reply_text_and_audio(reply_token, text, audio_url, duration_ms):
     with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
-        line_bot_api.reply_message(
+        MessagingApi(api_client).reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
                 messages=[
@@ -129,11 +154,9 @@ def reply_text_and_audio(reply_token, text, audio_url, duration_ms):
         )
 
 
-# ================= LINE 音訊處理 =================
+# ================= 音訊處理 =================
 def save_line_audio(audio_content, temp_audio):
-    if isinstance(audio_content, (bytes, bytearray)):
-        temp_audio.write(audio_content)
-    elif hasattr(audio_content, "data"):
+    if hasattr(audio_content, "data"):
         temp_audio.write(audio_content.data)
     else:
         for chunk in audio_content:
@@ -155,7 +178,16 @@ def callback():
     return "OK"
 
 
-# ================= 文字處理（群組＋私訊全自動） =================
+# ================= 抓 @名字 =================
+def extract_name(text):
+    words = text.split()
+    for w in words:
+        if w.startswith("@"):
+            return w[1:]
+    return None
+
+
+# ================= 文字處理 =================
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text_message(event):
     try:
@@ -164,16 +196,33 @@ def handle_text_message(event):
         if not user_text:
             return
 
+        user_id = event.source.user_id
+
+        # 🔥 取得名稱
+        with ApiClient(configuration) as api_client:
+            profile = MessagingApi(api_client).get_profile(user_id)
+            user_name = profile.display_name
+
+        # 🔥 記住 user
+        USER_MEMORY[user_name] = user_id
+        print("記住:", user_name, user_id)
+
+        # 🔥 抓 mention
+        target_name = extract_name(user_text)
+
         translated = translate_text(user_text)
 
-        reply_text(event.reply_token, translated)
+        if target_name:
+            reply_with_mention(event.reply_token, target_name, translated)
+        else:
+            reply_text(event.reply_token, translated)
 
     except Exception as e:
         print("Text error:", e)
-        reply_text(event.reply_token, "翻譯失敗，請再試一次。")
+        reply_text(event.reply_token, "翻譯失敗")
 
 
-# ================= 語音處理（群組＋私訊全自動） =================
+# ================= 語音處理 =================
 @handler.add(MessageEvent, message=AudioMessageContent)
 def handle_audio_message(event):
     temp_audio_path = None
@@ -183,7 +232,7 @@ def handle_audio_message(event):
         duration_ms = getattr(event.message, "duration", 0)
 
         if duration_ms and duration_ms >= MAX_AUDIO_DURATION_MS:
-            reply_text(event.reply_token, "語音超過60秒，請縮短後再試。")
+            reply_text(event.reply_token, "語音太長")
             return
 
         with ApiClient(configuration) as api_client:
@@ -194,15 +243,7 @@ def handle_audio_message(event):
                 save_line_audio(audio_content, temp_audio)
                 temp_audio_path = temp_audio.name
 
-        if os.path.getsize(temp_audio_path) == 0:
-            reply_text(event.reply_token, "語音下載失敗")
-            return
-
         transcript_text = transcribe_audio(temp_audio_path)
-
-        if not transcript_text:
-            reply_text(event.reply_token, "無法辨識語音")
-            return
 
         translated = translate_text(transcript_text)
 
@@ -211,14 +252,14 @@ def handle_audio_message(event):
 
         generate_tts_audio(translated, tts_path)
 
-        tts_duration_ms = get_mp3_duration_ms(tts_path)
+        duration = get_mp3_duration_ms(tts_path)
         audio_url = upload_audio_to_cloudinary(tts_path)
 
         reply_text_and_audio(
             event.reply_token,
-            f"{translated}",
+            translated,
             audio_url,
-            tts_duration_ms
+            duration
         )
 
     except Exception as e:
