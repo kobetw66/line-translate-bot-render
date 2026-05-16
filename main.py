@@ -162,27 +162,21 @@ def handle_audio_message(event):
             reply_text(event.reply_token, "語音檔下載失敗，請再試一次。")
             return
 
-        transcript_text = transcribe_audio(temp_audio_path)
+        translated = translate_text(transcript_text)
 
-        if not transcript_text:
-            reply_text(event.reply_token, "沒有辨識到語音內容，請再試一次。")
-            return
+        tts_path = "tts_output.mp3"
 
-           translated = translate_text(transcript_text)
+        generate_tts_audio(translated, tts_path)
 
-            tts_path = "tts_output.mp3"
+        audio_url = upload_audio_to_cloudinary(tts_path)
 
-            generate_tts_audio(translated, tts_path)
+        reply_text(
+            event.reply_token,
+            f"語音辨識：{transcript_text}\n\n翻譯：{translated}\n\n語音：{audio_url}"
+        )
 
-            audio_url = upload_audio_to_cloudinary(tts_path)
-
-            reply_text(
-                event.reply_token,
-                f"語音辨識：{transcript_text}\n\n翻譯：{translated}\n\n語音：{audio_url}"
-            )
-
-if os.path.exists(tts_path):
-    os.remove(tts_path) 
+        if os.path.exists(tts_path):
+            os.remove(tts_path)
 
     except Exception as e:
         print("Audio error:", e)
