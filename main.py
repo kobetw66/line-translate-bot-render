@@ -1,6 +1,5 @@
 import os
 import tempfile
-import subprocess
 from flask import Flask, request, abort
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -10,8 +9,20 @@ import cloudinary
 import cloudinary.uploader
 
 from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import *
-from linebot.v3.webhooks import *
+from linebot.v3.messaging import (
+    Configuration,
+    ApiClient,
+    MessagingApi,
+    MessagingApiBlob,
+    ReplyMessageRequest,
+    TextMessage,
+    AudioMessage
+)
+from linebot.v3.webhooks import (
+    MessageEvent,
+    TextMessageContent,
+    AudioMessageContent
+)
 from linebot.v3.exceptions import InvalidSignatureError
 
 load_dotenv()
@@ -45,15 +56,6 @@ def translate_text(text):
         input=prompt
     )
     return response.output_text.strip()
-
-# ================= 語音轉 wav（關鍵修正）=================
-def convert_to_wav(input_path, output_path):
-    subprocess.run([
-        "ffmpeg",
-        "-y",
-        "-i", input_path,
-        output_path
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # ================= 語音辨識 =================
 def transcribe_audio(file_path):
@@ -110,6 +112,12 @@ def reply_audio(token, text, url, duration):
             )
         )
 
+# ================= 🔥 正確存 LINE 音訊（關鍵修正） =================
+def save_line_audio(audio_content, file_path):
+    audio_bytes = audio_content.read()   # ✅ 關鍵：一次讀完整 bytes
+    with open(file_path, "wb") as f:
+        f.write(audio_bytes)
+
 # ================= Webhook =================
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -132,11 +140,10 @@ def handle_text(event):
     except Exception as e:
         reply_text(event.reply_token, f"錯誤：{e}")
 
-# ================= 語音（已完全修好）=================
+# ================= 語音 =================
 @handler.add(MessageEvent, message=AudioMessageContent)
 def handle_audio(event):
     m4a_path = None
-    wav_path = None
     tts_path = None
 
     try:
@@ -145,16 +152,14 @@ def handle_audio(event):
             content = blob.get_message_content(event.message.id)
 
             with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as f:
-                for chunk in content:
-                    if isinstance(chunk, bytes):
-                        f.write(chunk)
                 m4a_path = f.name
 
-        # 🔥 轉 wav（關鍵）
-        wav_path = m4a_path.replace(".m4a", ".wav")
-        convert_to_wav(m4a_path, wav_path)
+        # 🔥 正確存音訊
+        save_line_audio(content, m4a_path)
 
-        text = transcribe_audio(wav_path)
+        # 🔥 Whisper 直接吃 m4a（不用轉檔）
+        text = transcribe_audio(m4a_path)
+
         translated = translate_text(text)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
@@ -172,9 +177,10 @@ def handle_audio(event):
         reply_text(event.reply_token, f"語音錯誤：{e}")
 
     finally:
-        for p in [m4a_path, wav_path, tts_path]:
-            if p and os.path.exists(p):
-                os.remove(p)
+        if m4a_path and os.path.exists(m4a_path):
+            os.remove(m4a_path)
+        if tts_path and os.path.exists(tts_path):
+            os.remove(tts_path)
 
 @app.route("/")
 def home():
