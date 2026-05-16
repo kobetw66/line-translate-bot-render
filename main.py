@@ -47,33 +47,46 @@ cloudinary.config(
 
 # ================= 翻譯 =================
 def translate_text(text):
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=text
-    )
-    return response.output_text.strip()
+    try:
+        response = client.responses.create(
+            model="gpt-4o-mini",  # ✅ 改成穩定版
+            input=text
+        )
+        return response.output_text.strip()
+    except Exception as e:
+        print("🔥 Translate error:", str(e))
+        raise
 
 
 # ================= 語音辨識 =================
 def transcribe_audio(file_path):
-    with open(file_path, "rb") as audio_file:
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file
-        )
-    return transcript.text.strip()
+    try:
+        with open(file_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file
+            )
+        return transcript.text.strip()
+    except Exception as e:
+        print("🔥 Transcribe error:", str(e))
+        raise
 
 
 # ================= TTS =================
 def generate_tts_audio(text, output_path):
-    response = client.audio.speech.create(
-        model="gpt-4o-mini-tts",
-        voice="alloy",
-        input=text
-    )
+    try:
+        response = client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice="alloy",
+            input=text
+        )
 
-    with open(output_path, "wb") as f:
-        f.write(response.read())
+        with open(output_path, "wb") as f:
+            f.write(response.read())
+
+    except Exception as e:
+        print("🔥 TTS error:", str(e))
+        raise
 
 
 def get_mp3_duration_ms(file_path):
@@ -83,11 +96,15 @@ def get_mp3_duration_ms(file_path):
 
 # ================= Cloudinary =================
 def upload_audio_to_cloudinary(file_path):
-    result = cloudinary.uploader.upload(
-        file_path,
-        resource_type="video"
-    )
-    return result["secure_url"]
+    try:
+        result = cloudinary.uploader.upload(
+            file_path,
+            resource_type="video"
+        )
+        return result["secure_url"]
+    except Exception as e:
+        print("🔥 Cloudinary error:", str(e))
+        raise
 
 
 # ================= 回覆 =================
@@ -101,7 +118,7 @@ def reply_text(reply_token, text):
         )
 
 
-# 🔥 用 LINE 原始 mention（關鍵）
+# 🔥 用 LINE 原始 mention（真正 tag）
 def reply_with_original_mention(reply_token, original_text, mention, translated_text):
     new_text = original_text + "\n" + translated_text
 
@@ -112,7 +129,7 @@ def reply_with_original_mention(reply_token, original_text, mention, translated_
                 messages=[
                     TextMessage(
                         text=new_text,
-                        mention=mention  # 🔥 直接使用 LINE 原始 mention
+                        mention=mention
                     )
                 ]
             )
@@ -168,7 +185,6 @@ def handle_text_message(event):
         if not user_text:
             return
 
-        # 🔥 抓 LINE 原始 mention
         mention = getattr(event.message, "mention", None)
 
         translated = translate_text(user_text)
@@ -184,8 +200,8 @@ def handle_text_message(event):
             reply_text(event.reply_token, translated)
 
     except Exception as e:
-        print("Text error:", e)
-        reply_text(event.reply_token, "翻譯失敗")
+        print("🔥 Text error:", str(e))
+        reply_text(event.reply_token, f"錯誤：{str(e)}")  # ✅ 顯示錯誤
 
 
 # ================= 語音處理 =================
@@ -229,8 +245,8 @@ def handle_audio_message(event):
         )
 
     except Exception as e:
-        print("Audio error:", e)
-        reply_text(event.reply_token, "語音翻譯失敗")
+        print("🔥 Audio error:", str(e))
+        reply_text(event.reply_token, f"語音錯誤：{str(e)}")
 
     finally:
         if temp_audio_path and os.path.exists(temp_audio_path):
