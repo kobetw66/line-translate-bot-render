@@ -39,15 +39,11 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 MAX_AUDIO_DURATION_MS = 60000
 
-# 🔥 自動記住 user
-USER_MEMORY = {}
-
 cloudinary.config(
     cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
     api_key=os.getenv("CLOUDINARY_API_KEY"),
     api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
-
 
 # ================= 翻譯 =================
 def translate_text(text):
@@ -105,24 +101,9 @@ def reply_text(reply_token, text):
         )
 
 
-# 🔥 真正 mention（穩定版）
-def reply_with_mention(reply_token, name, translated_text):
-    user_id = USER_MEMORY.get(name)
-
-    message_text = f"@{name}\n{translated_text}"
-
-    if not user_id:
-        return reply_text(reply_token, message_text)
-
-    mention = {
-        "mentionees": [
-            {
-                "index": 0,
-                "length": len(f"@{name}"),
-                "userId": user_id
-            }
-        ]
-    }
+# 🔥 用 LINE 原始 mention（關鍵）
+def reply_with_original_mention(reply_token, original_text, mention, translated_text):
+    new_text = original_text + "\n" + translated_text
 
     with ApiClient(configuration) as api_client:
         MessagingApi(api_client).reply_message(
@@ -130,8 +111,8 @@ def reply_with_mention(reply_token, name, translated_text):
                 reply_token=reply_token,
                 messages=[
                     TextMessage(
-                        text=message_text,
-                        mention=mention
+                        text=new_text,
+                        mention=mention  # 🔥 直接使用 LINE 原始 mention
                     )
                 ]
             )
@@ -178,15 +159,6 @@ def callback():
     return "OK"
 
 
-# ================= 抓 @名字 =================
-def extract_name(text):
-    words = text.split()
-    for w in words:
-        if w.startswith("@"):
-            return w[1:]
-    return None
-
-
 # ================= 文字處理 =================
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text_message(event):
@@ -196,24 +168,18 @@ def handle_text_message(event):
         if not user_text:
             return
 
-        user_id = event.source.user_id
-
-        # 🔥 取得名稱
-        with ApiClient(configuration) as api_client:
-            profile = MessagingApi(api_client).get_profile(user_id)
-            user_name = profile.display_name
-
-        # 🔥 記住 user
-        USER_MEMORY[user_name] = user_id
-        print("記住:", user_name, user_id)
-
-        # 🔥 抓 mention
-        target_name = extract_name(user_text)
+        # 🔥 抓 LINE 原始 mention
+        mention = getattr(event.message, "mention", None)
 
         translated = translate_text(user_text)
 
-        if target_name:
-            reply_with_mention(event.reply_token, target_name, translated)
+        if mention:
+            reply_with_original_mention(
+                event.reply_token,
+                user_text,
+                mention,
+                translated
+            )
         else:
             reply_text(event.reply_token, translated)
 
