@@ -67,17 +67,22 @@ def transcribe_audio(file_path):
     return result.text.strip()
 
 # ================= TTS =================
-def generate_tts_audio(text, output_path):
-    response = client.audio.speech.create(
-        model="gpt-4o-mini-tts",
-        voice="alloy",
-        input=text
-    )
+from gtts import gTTS
 
-    with open(output_path, "wb") as f:
-        for chunk in response.iter_bytes():
-            if isinstance(chunk, bytes):
-                f.write(chunk)
+def generate_tts_audio(text, output_path):
+    try:
+        # 判斷語言
+        if any('\u4e00' <= ch <= '\u9fff' for ch in text):
+            lang = "zh-TW"
+        else:
+            lang = "id"
+
+        tts = gTTS(text=text, lang=lang)
+        tts.save(output_path)
+
+    except Exception as e:
+        print("🔥 gTTS error:", str(e))
+        raise
 
 # ================= Cloudinary =================
 def upload_audio(file_path):
