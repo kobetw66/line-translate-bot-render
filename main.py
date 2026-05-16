@@ -114,7 +114,13 @@ def reply_audio(token, text, url, duration):
 
 # ================= 🔥 正確存 LINE 音訊（關鍵修正） =================
 def save_line_audio(audio_content, file_path):
-    audio_bytes = audio_content.read()   # ✅ 關鍵：一次讀完整 bytes
+    if isinstance(audio_content, bytes):
+        audio_bytes = audio_content
+    else:
+        audio_bytes = audio_content.read()
+
+    with open(file_path, "wb") as f:
+        f.write(audio_bytes)  # ✅ 關鍵：一次讀完整 bytes
     with open(file_path, "wb") as f:
         f.write(audio_bytes)
 
