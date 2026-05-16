@@ -45,14 +45,29 @@ cloudinary.config(
     api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
 
+# ================= 語言判斷 =================
+def is_chinese(text):
+    for ch in text:
+        if '\u4e00' <= ch <= '\u9fff':
+            return True
+    return False
+
+
 # ================= 翻譯 =================
 def translate_text(text):
     try:
+        if is_chinese(text):
+            prompt = f"請將以下中文翻譯成自然的印尼文：\n{text}"
+        else:
+            prompt = f"請將以下印尼文翻譯成自然的繁體中文：\n{text}"
+
         response = client.responses.create(
-            model="gpt-4o-mini",  # ✅ 改成穩定版
-            input=text
+            model="gpt-4o-mini",
+            input=prompt
         )
+
         return response.output_text.strip()
+
     except Exception as e:
         print("🔥 Translate error:", str(e))
         raise
@@ -96,15 +111,11 @@ def get_mp3_duration_ms(file_path):
 
 # ================= Cloudinary =================
 def upload_audio_to_cloudinary(file_path):
-    try:
-        result = cloudinary.uploader.upload(
-            file_path,
-            resource_type="video"
-        )
-        return result["secure_url"]
-    except Exception as e:
-        print("🔥 Cloudinary error:", str(e))
-        raise
+    result = cloudinary.uploader.upload(
+        file_path,
+        resource_type="video"
+    )
+    return result["secure_url"]
 
 
 # ================= 回覆 =================
@@ -118,7 +129,7 @@ def reply_text(reply_token, text):
         )
 
 
-# 🔥 用 LINE 原始 mention（真正 tag）
+# 🔥 保留 LINE 原始 mention（真正 tag）
 def reply_with_original_mention(reply_token, original_text, mention, translated_text):
     new_text = original_text + "\n" + translated_text
 
@@ -185,6 +196,8 @@ def handle_text_message(event):
         if not user_text:
             return
 
+        print("收到訊息:", user_text)
+
         mention = getattr(event.message, "mention", None)
 
         translated = translate_text(user_text)
@@ -201,7 +214,7 @@ def handle_text_message(event):
 
     except Exception as e:
         print("🔥 Text error:", str(e))
-        reply_text(event.reply_token, f"錯誤：{str(e)}")  # ✅ 顯示錯誤
+        reply_text(event.reply_token, f"錯誤：{str(e)}")
 
 
 # ================= 語音處理 =================
