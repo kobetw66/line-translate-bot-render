@@ -164,6 +164,22 @@ def handle_text_message(event):
         if not user_text:
             return
 
+        source_type = event.source.type
+
+        # 群組或多人聊天室：只有 /翻譯 開頭才翻譯，避免洗版與浪費 token
+        if source_type in ["group", "room"]:
+            if not user_text.startswith("/翻譯"):
+                return
+
+            user_text = user_text.replace("/翻譯", "", 1).strip()
+
+            if not user_text:
+                reply_text(
+                    event.reply_token,
+                    "請輸入要翻譯的內容，例如：/翻譯 今天幫阿公量血壓"
+                )
+                return
+
         translated = translate_text(user_text)
         reply_text(event.reply_token, translated)
 
@@ -178,6 +194,16 @@ def handle_audio_message(event):
     tts_path = None
 
     try:
+        source_type = event.source.type
+
+        # 群組語音先不自動翻，避免大量消耗 OpenAI 費用
+        if source_type in ["group", "room"]:
+            reply_text(
+                event.reply_token,
+                "群組語音翻譯目前先關閉，請用文字指令：/翻譯 內容"
+            )
+            return
+
         duration_ms = getattr(event.message, "duration", 0)
         print("Audio duration:", duration_ms)
 
