@@ -14,7 +14,8 @@ from linebot.v3.messaging import (
     MessagingApi,
     MessagingApiBlob,
     ReplyMessageRequest,
-    TextMessage
+    TextMessage,
+    AudioMessage
 )
 from linebot.v3.webhooks import (
     MessageEvent,
@@ -98,6 +99,23 @@ def reply_text(reply_token, text):
             ReplyMessageRequest(
                 reply_token=reply_token,
                 messages=[TextMessage(text=text)]
+            )
+        )
+
+
+def reply_text_and_audio(reply_token, text, audio_url, duration_ms):
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[
+                    TextMessage(text=text),
+                    AudioMessage(
+                        original_content_url=audio_url,
+                        duration=duration_ms
+                    )
+                ]
             )
         )
 
@@ -195,9 +213,11 @@ def handle_audio_message(event):
 
         audio_url = upload_audio_to_cloudinary(tts_path)
 
-        reply_text(
+        reply_text_and_audio(
             event.reply_token,
-            f"語音辨識：{transcript_text}\n\n翻譯：{translated}\n\n語音：{audio_url}"
+            f"語音辨識：{transcript_text}\n\n翻譯：{translated}",
+            audio_url,
+            5000
         )
 
     except Exception as e:
