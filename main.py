@@ -2,6 +2,7 @@ import os
 import re
 import tempfile
 from flask import Flask, request, abort
+from dotenv import load_dotenv
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -24,6 +25,8 @@ from langdetect import detect
 from openai import OpenAI
 
 
+load_dotenv()
+
 app = Flask(__name__)
 
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -32,12 +35,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-
-# =========================
-# 語言判斷
-# =========================
 
 INDONESIAN_WORDS = [
     "saya", "aku", "kamu", "dia", "mereka",
@@ -95,38 +95,21 @@ def detect_language_smart(text):
         return "unknown"
 
 
-# =========================
-# 翻譯
-# =========================
-
 def translate_by_language(text):
     lang = detect_language_smart(text)
 
     if lang == "zh":
         translated = GoogleTranslator(source="auto", target="id").translate(text)
-        return (
-            "【中文 → 印尼文】\n"
-            f"{translated}"
-        )
+        return "【中文 → 印尼文】\n" + translated
 
     elif lang == "id":
         translated = GoogleTranslator(source="auto", target="zh-TW").translate(text)
-        return (
-            "【印尼文 → 中文】\n"
-            f"{translated}"
-        )
+        return "【印尼文 → 中文】\n" + translated
 
     else:
         translated = GoogleTranslator(source="auto", target="zh-TW").translate(text)
-        return (
-            "【自動翻譯 → 中文】\n"
-            f"{translated}"
-        )
+        return "【自動翻譯 → 中文】\n" + translated
 
-
-# =========================
-# 語音轉文字
-# =========================
 
 def speech_to_text(audio_bytes):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as temp_audio:
@@ -139,7 +122,6 @@ def speech_to_text(audio_bytes):
                 model="whisper-1",
                 file=audio_file
             )
-
         return transcript.text
 
     finally:
@@ -147,9 +129,10 @@ def speech_to_text(audio_bytes):
             os.remove(temp_audio_path)
 
 
-# =========================
-# LINE Webhook
-# =========================
+@app.route("/", methods=["GET"])
+def home():
+    return "LINE BOT Translation Bot is running."
+
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -164,38 +147,24 @@ def callback():
     return "OK"
 
 
-# =========================
-# 處理文字訊息
-# =========================
-
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text_message(event):
     text = event.message.text.strip()
 
-    if not text:
-        return
-
     try:
         reply_text = translate_by_language(text)
-
     except Exception as e:
-        reply_text = f"翻譯失敗：{e}"
+        reply_text = "翻譯失敗：" + str(e)
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
-                messages=[
-                    TextMessage(text=reply_text)
-                ]
+                messages=[TextMessage(text=reply_text)]
             )
         )
 
-
-# =========================
-# 處理語音訊息
-# =========================
 
 @handler.add(MessageEvent, message=AudioMessageContent)
 def handle_audio_message(event):
@@ -205,42 +174,27 @@ def handle_audio_message(event):
             audio_content = blob_api.get_message_content(event.message.id)
 
         recognized_text = speech_to_text(audio_content)
-
         translated_text = translate_by_language(recognized_text)
 
         reply_text = (
             "【語音辨識】\n"
-            f"{recognized_text}\n\n"
-            f"{translated_text}"
+            + recognized_text
+            + "\n\n"
+            + translated_text
         )
 
     except Exception as e:
-        reply_text = f"語音處理失敗：{e}"
+        reply_text = "語音處理失敗：" + str(e)
 
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
-                messages=[
-                    TextMessage(text=reply_text)
-                ]
+                messages=[TextMessage(text=reply_text)]
             )
         )
 
-
-# =========================
-# 首頁測試
-# =========================
-
-@app.route("/", methods=["GET"])
-def home():
-    return "LINE BOT Translation Bot is running."
-
-
-# =========================
-# 啟動
-# =========================
 
 if __name__ == "__main__":
     app.run(
