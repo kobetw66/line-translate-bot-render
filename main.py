@@ -161,7 +161,7 @@ def handle_audio_message(event):
         if file_size == 0:
             reply_text(event.reply_token, "語音檔下載失敗，請再試一次。")
             return
-
+        transcript_text = transcribe_audio(temp_audio_path)
         translated = translate_text(transcript_text)
 
         tts_path = "tts_output.mp3"
