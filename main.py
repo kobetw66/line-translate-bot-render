@@ -1,4 +1,5 @@
 import os
+import time
 import tempfile
 from flask import Flask, request, abort
 from dotenv import load_dotenv
@@ -38,6 +39,10 @@ configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 MAX_AUDIO_DURATION_MS = 60000
+GROUP_AUDIO_ARM_SECONDS = 120
+BOT_NAME = "中文印尼文翻譯"
+
+group_audio_arm = {}
 
 cloudinary.config(
     cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
@@ -143,67 +148,57 @@ def save_line_audio(audio_content, temp_audio):
                 temp_audio.write(chunk)
 
 
-@app.route("/callback", methods=["POST"])
-def callback():
-    signature = request.headers.get("X-Line-Signature")
-    body = request.get_data(as_text=True)
-
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-
-    return "OK"
+def get_source_key(event):
+    source = event.source
+    if source.type == "group":
+        return source.group_id
+    if source.type == "room":
+        return source.room_id
+    return source.user_id
 
 
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_text_message(event):
-    try:
-        user_text = event.message.text.strip()
-
-        if not user_text:
-            return
-
-        source_type = event.source.type
-
-        # 群組或多人聊天室：只有 /翻譯 開頭才翻譯，避免洗版與浪費 token
-        if source_type in ["group", "room"]:
-            if not user_text.startswith("/翻譯"):
-                return
-
-            user_text = user_text.replace("/翻譯", "", 1).strip()
-
-            if not user_text:
-                reply_text(
-                    event.reply_token,
-                    "請輸入要翻譯的內容，例如：/翻譯 今天幫阿公量血壓"
-                )
-                return
-
-        translated = translate_text(user_text)
-        reply_text(event.reply_token, translated)
-
-    except Exception as e:
-        print("Text error:", e)
-        reply_text(event.reply_token, "文字翻譯失敗，請再試一次。")
+def is_group_or_room(event):
+    return event.source.type in ["group", "room"]
 
 
-@handler.add(MessageEvent, message=AudioMessageContent)
-def handle_audio_message(event):
+def clean_group_text_command(text):
+    text = text.strip()
+
+    if text.startswith("/T"):
+        return text.replace("/T", "", 1).strip(), True
+
+    if text.startswith("/t"):
+        return text.replace("/t", "", 1).strip(), True
+
+    if BOT_NAME in text:
+        cleaned = text.replace("@" + BOT_NAME, "").replace(BOT_NAME, "").strip()
+        return cleaned, True
+
+    return text, False
+
+
+def arm_group_audio(event):
+    key = get_source_key(event)
+    group_audio_arm[key] = time.time() + GROUP_AUDIO_ARM_SECONDS
+
+
+def is_group_audio_armed(event):
+    key = get_source_key(event)
+    expire_time = group_audio_arm.get(key, 0)
+
+    if time.time() <= expire_time:
+        group_audio_arm.pop(key, None)
+        return True
+
+    group_audio_arm.pop(key, None)
+    return False
+
+
+def process_audio_and_reply(event):
     temp_audio_path = None
     tts_path = None
 
     try:
-        source_type = event.source.type
-
-        # 群組語音先不自動翻，避免大量消耗 OpenAI 費用
-        if source_type in ["group", "room"]:
-            reply_text(
-                event.reply_token,
-                "群組語音翻譯目前先關閉，請用文字指令：/翻譯 內容"
-            )
-            return
-
         duration_ms = getattr(event.message, "duration", 0)
         print("Audio duration:", duration_ms)
 
@@ -219,10 +214,7 @@ def handle_audio_message(event):
                 save_line_audio(audio_content, temp_audio)
                 temp_audio_path = temp_audio.name
 
-        file_size = os.path.getsize(temp_audio_path)
-        print("Audio file size:", file_size)
-
-        if file_size == 0:
+        if os.path.getsize(temp_audio_path) == 0:
             reply_text(event.reply_token, "語音檔下載失敗，請再試一次。")
             return
 
@@ -263,6 +255,59 @@ def handle_audio_message(event):
 
         if tts_path and os.path.exists(tts_path):
             os.remove(tts_path)
+
+
+@app.route("/callback", methods=["POST"])
+def callback():
+    signature = request.headers.get("X-Line-Signature")
+    body = request.get_data(as_text=True)
+
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+
+    return "OK"
+
+
+@handler.add(MessageEvent, message=TextMessageContent)
+def handle_text_message(event):
+    try:
+        user_text = event.message.text.strip()
+
+        if not user_text:
+            return
+
+        if is_group_or_room(event):
+            cleaned_text, triggered = clean_group_text_command(user_text)
+
+            if not triggered:
+                return
+
+            if not cleaned_text:
+                arm_group_audio(event)
+                reply_text(event.reply_token, "請在2分鐘內傳送語音，我會幫你翻譯並回傳語音。")
+                return
+
+            translated = translate_text(cleaned_text)
+            reply_text(event.reply_token, translated)
+            return
+
+        translated = translate_text(user_text)
+        reply_text(event.reply_token, translated)
+
+    except Exception as e:
+        print("Text error:", e)
+        reply_text(event.reply_token, "文字翻譯失敗，請再試一次。")
+
+
+@handler.add(MessageEvent, message=AudioMessageContent)
+def handle_audio_message(event):
+    if is_group_or_room(event):
+        if not is_group_audio_armed(event):
+            return
+
+    process_audio_and_reply(event)
 
 
 @app.route("/")
