@@ -3,6 +3,7 @@ import tempfile
 from flask import Flask, request, abort
 from dotenv import load_dotenv
 from openai import OpenAI
+from mutagen.mp3 import MP3
 
 import cloudinary
 import cloudinary.uploader
@@ -82,6 +83,11 @@ def generate_tts_audio(text, output_path):
 
     with open(output_path, "wb") as f:
         f.write(response.read())
+
+
+def get_mp3_duration_ms(file_path):
+    audio = MP3(file_path)
+    return int(audio.info.length * 1000)
 
 
 def upload_audio_to_cloudinary(file_path):
@@ -211,13 +217,14 @@ def handle_audio_message(event):
             reply_text(event.reply_token, "語音檔產生失敗，請再試一次。")
             return
 
+        tts_duration_ms = get_mp3_duration_ms(tts_path)
         audio_url = upload_audio_to_cloudinary(tts_path)
 
         reply_text_and_audio(
             event.reply_token,
             f"語音辨識：{transcript_text}\n\n翻譯：{translated}",
             audio_url,
-            5000
+            tts_duration_ms
         )
 
     except Exception as e:
