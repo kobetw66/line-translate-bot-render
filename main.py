@@ -1,14 +1,10 @@
 import os
+import re
 import tempfile
 from flask import Flask, request, abort
-from dotenv import load_dotenv
-from openai import OpenAI
-from mutagen.mp3 import MP3
-
-import cloudinary
-import cloudinary.uploader
 
 from linebot.v3 import WebhookHandler
+from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     Configuration,
     ApiClient,
@@ -16,153 +12,145 @@ from linebot.v3.messaging import (
     MessagingApiBlob,
     ReplyMessageRequest,
     TextMessage,
-    AudioMessage
 )
 from linebot.v3.webhooks import (
     MessageEvent,
     TextMessageContent,
-    AudioMessageContent
+    AudioMessageContent,
 )
-from linebot.v3.exceptions import InvalidSignatureError
 
-load_dotenv()
+from deep_translator import GoogleTranslator
+from langdetect import detect
+from openai import OpenAI
+
 
 app = Flask(__name__)
 
-LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
-client = OpenAI(api_key=OPENAI_API_KEY)
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-MAX_AUDIO_DURATION_MS = 60000
 
-cloudinary.config(
-    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-    api_key=os.getenv("CLOUDINARY_API_KEY"),
-    api_secret=os.getenv("CLOUDINARY_API_SECRET")
-)
+# =========================
+# 語言判斷
+# =========================
 
-# ================= 翻譯 =================
-def translate_text(text):
+INDONESIAN_WORDS = [
+    "saya", "aku", "kamu", "dia", "mereka",
+    "tidak", "bukan", "sudah", "belum",
+    "makan", "minum", "mandi", "tidur",
+    "obat", "dokter", "sakit", "pusing",
+    "terima", "kasih", "selamat", "pagi",
+    "siang", "malam", "tolong", "bantu",
+    "darah", "gula", "tekanan", "rumah",
+    "ibu", "bapak", "nenek", "kakek",
+]
+
+
+def clean_text(text):
+    text = re.sub(r"@\S+", "", text)
+    text = re.sub(r"http\S+", "", text)
+    text = re.sub(r"[^\w\s\u4e00-\u9fff]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def has_chinese(text):
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
+
+
+def has_indonesian_words(text):
+    words = clean_text(text).lower().split()
+    return any(word in words for word in INDONESIAN_WORDS)
+
+
+def detect_language_smart(text):
+    cleaned = clean_text(text)
+
+    if not cleaned:
+        return "unknown"
+
+    if has_chinese(cleaned):
+        return "zh"
+
+    if has_indonesian_words(cleaned):
+        return "id"
+
     try:
-        response = client.responses.create(
-            model="gpt-4o-mini",  # ✅ 改成穩定版
-            input=text
+        lang = detect(cleaned)
+
+        if lang in ["zh-cn", "zh-tw", "zh"]:
+            return "zh"
+
+        if lang == "id":
+            return "id"
+
+        return lang
+
+    except Exception:
+        return "unknown"
+
+
+# =========================
+# 翻譯
+# =========================
+
+def translate_by_language(text):
+    lang = detect_language_smart(text)
+
+    if lang == "zh":
+        translated = GoogleTranslator(source="auto", target="id").translate(text)
+        return (
+            "【中文 → 印尼文】\n"
+            f"{translated}"
         )
-        return response.output_text.strip()
-    except Exception as e:
-        print("🔥 Translate error:", str(e))
-        raise
+
+    elif lang == "id":
+        translated = GoogleTranslator(source="auto", target="zh-TW").translate(text)
+        return (
+            "【印尼文 → 中文】\n"
+            f"{translated}"
+        )
+
+    else:
+        translated = GoogleTranslator(source="auto", target="zh-TW").translate(text)
+        return (
+            "【自動翻譯 → 中文】\n"
+            f"{translated}"
+        )
 
 
-# ================= 語音辨識 =================
-def transcribe_audio(file_path):
+# =========================
+# 語音轉文字
+# =========================
+
+def speech_to_text(audio_bytes):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as temp_audio:
+        temp_audio.write(audio_bytes)
+        temp_audio_path = temp_audio.name
+
     try:
-        with open(file_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
+        with open(temp_audio_path, "rb") as audio_file:
+            transcript = openai_client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_file
             )
-        return transcript.text.strip()
-    except Exception as e:
-        print("🔥 Transcribe error:", str(e))
-        raise
+
+        return transcript.text
+
+    finally:
+        if os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
 
 
-# ================= TTS =================
-def generate_tts_audio(text, output_path):
-    try:
-        response = client.audio.speech.create(
-            model="gpt-4o-mini-tts",
-            voice="alloy",
-            input=text
-        )
+# =========================
+# LINE Webhook
+# =========================
 
-        with open(output_path, "wb") as f:
-            f.write(response.read())
-
-    except Exception as e:
-        print("🔥 TTS error:", str(e))
-        raise
-
-
-def get_mp3_duration_ms(file_path):
-    audio = MP3(file_path)
-    return int(audio.info.length * 1000)
-
-
-# ================= Cloudinary =================
-def upload_audio_to_cloudinary(file_path):
-    try:
-        result = cloudinary.uploader.upload(
-            file_path,
-            resource_type="video"
-        )
-        return result["secure_url"]
-    except Exception as e:
-        print("🔥 Cloudinary error:", str(e))
-        raise
-
-
-# ================= 回覆 =================
-def reply_text(reply_token, text):
-    with ApiClient(configuration) as api_client:
-        MessagingApi(api_client).reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[TextMessage(text=text)]
-            )
-        )
-
-
-# 🔥 用 LINE 原始 mention（真正 tag）
-def reply_with_original_mention(reply_token, original_text, mention, translated_text):
-    new_text = original_text + "\n" + translated_text
-
-    with ApiClient(configuration) as api_client:
-        MessagingApi(api_client).reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[
-                    TextMessage(
-                        text=new_text,
-                        mention=mention
-                    )
-                ]
-            )
-        )
-
-
-def reply_text_and_audio(reply_token, text, audio_url, duration_ms):
-    with ApiClient(configuration) as api_client:
-        MessagingApi(api_client).reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[
-                    TextMessage(text=text),
-                    AudioMessage(
-                        original_content_url=audio_url,
-                        duration=duration_ms
-                    )
-                ]
-            )
-        )
-
-
-# ================= 音訊處理 =================
-def save_line_audio(audio_content, temp_audio):
-    if hasattr(audio_content, "data"):
-        temp_audio.write(audio_content.data)
-    else:
-        for chunk in audio_content:
-            if chunk:
-                temp_audio.write(chunk)
-
-
-# ================= Webhook =================
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature")
@@ -176,90 +164,86 @@ def callback():
     return "OK"
 
 
-# ================= 文字處理 =================
+# =========================
+# 處理文字訊息
+# =========================
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text_message(event):
+    text = event.message.text.strip()
+
+    if not text:
+        return
+
     try:
-        user_text = event.message.text.strip()
-
-        if not user_text:
-            return
-
-        mention = getattr(event.message, "mention", None)
-
-        translated = translate_text(user_text)
-
-        if mention:
-            reply_with_original_mention(
-                event.reply_token,
-                user_text,
-                mention,
-                translated
-            )
-        else:
-            reply_text(event.reply_token, translated)
+        reply_text = translate_by_language(text)
 
     except Exception as e:
-        print("🔥 Text error:", str(e))
-        reply_text(event.reply_token, f"錯誤：{str(e)}")  # ✅ 顯示錯誤
+        reply_text = f"翻譯失敗：{e}"
+
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[
+                    TextMessage(text=reply_text)
+                ]
+            )
+        )
 
 
-# ================= 語音處理 =================
+# =========================
+# 處理語音訊息
+# =========================
+
 @handler.add(MessageEvent, message=AudioMessageContent)
 def handle_audio_message(event):
-    temp_audio_path = None
-    tts_path = None
-
     try:
-        duration_ms = getattr(event.message, "duration", 0)
-
-        if duration_ms and duration_ms >= MAX_AUDIO_DURATION_MS:
-            reply_text(event.reply_token, "語音太長")
-            return
-
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
             audio_content = blob_api.get_message_content(event.message.id)
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as temp_audio:
-                save_line_audio(audio_content, temp_audio)
-                temp_audio_path = temp_audio.name
+        recognized_text = speech_to_text(audio_content)
 
-        transcript_text = transcribe_audio(temp_audio_path)
+        translated_text = translate_by_language(recognized_text)
 
-        translated = translate_text(transcript_text)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_tts:
-            tts_path = temp_tts.name
-
-        generate_tts_audio(translated, tts_path)
-
-        duration = get_mp3_duration_ms(tts_path)
-        audio_url = upload_audio_to_cloudinary(tts_path)
-
-        reply_text_and_audio(
-            event.reply_token,
-            translated,
-            audio_url,
-            duration
+        reply_text = (
+            "【語音辨識】\n"
+            f"{recognized_text}\n\n"
+            f"{translated_text}"
         )
 
     except Exception as e:
-        print("🔥 Audio error:", str(e))
-        reply_text(event.reply_token, f"語音錯誤：{str(e)}")
+        reply_text = f"語音處理失敗：{e}"
 
-    finally:
-        if temp_audio_path and os.path.exists(temp_audio_path):
-            os.remove(temp_audio_path)
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[
+                    TextMessage(text=reply_text)
+                ]
+            )
+        )
 
-        if tts_path and os.path.exists(tts_path):
-            os.remove(tts_path)
 
+# =========================
+# 首頁測試
+# =========================
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
-    return "LINE Translate Bot Running!"
+    return "LINE BOT Translation Bot is running."
 
+
+# =========================
+# 啟動
+# =========================
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 5000))
+    )
