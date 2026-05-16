@@ -87,7 +87,7 @@ def transcribe_audio(file_path):
         raise
 
 
-# ================= TTS =================
+# ================= TTS（已修正 bytes 錯誤）=================
 def generate_tts_audio(text, output_path):
     try:
         response = client.audio.speech.create(
@@ -97,7 +97,8 @@ def generate_tts_audio(text, output_path):
         )
 
         with open(output_path, "wb") as f:
-            f.write(response.read())
+            for chunk in response.iter_bytes():
+                f.write(chunk)
 
     except Exception as e:
         print("🔥 TTS error:", str(e))
