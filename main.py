@@ -37,8 +37,6 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-MAX_AUDIO_DURATION_MS = 60000
-
 cloudinary.config(
     cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
     api_key=os.getenv("CLOUDINARY_API_KEY"),
@@ -47,77 +45,50 @@ cloudinary.config(
 
 # ================= 語言判斷 =================
 def is_chinese(text):
-    for ch in text:
-        if '\u4e00' <= ch <= '\u9fff':
-            return True
-    return False
-
+    return any('\u4e00' <= ch <= '\u9fff' for ch in text)
 
 # ================= 翻譯 =================
 def translate_text(text):
-    try:
-        if is_chinese(text):
-            prompt = f"請將以下中文翻譯成自然的印尼文：\n{text}"
-        else:
-            prompt = f"請將以下印尼文翻譯成自然的繁體中文：\n{text}"
+    if is_chinese(text):
+        prompt = f"請翻譯成印尼文：{text}"
+    else:
+        prompt = f"請翻譯成繁體中文：{text}"
 
-        response = client.responses.create(
-            model="gpt-4o-mini",
-            input=prompt
-        )
-
-        return response.output_text.strip()
-
-    except Exception as e:
-        print("🔥 Translate error:", str(e))
-        raise
-
+    response = client.responses.create(
+        model="gpt-4o-mini",
+        input=prompt
+    )
+    return response.output_text.strip()
 
 # ================= 語音辨識 =================
 def transcribe_audio(file_path):
-    try:
-        with open(file_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file
-            )
-        return transcript.text.strip()
-    except Exception as e:
-        print("🔥 Transcribe error:", str(e))
-        raise
-
-
-# ================= TTS（已修正 bytes 錯誤）=================
-def generate_tts_audio(text, output_path):
-    try:
-        response = client.audio.speech.create(
-            model="gpt-4o-mini-tts",
-            voice="alloy",
-            input=text
+    with open(file_path, "rb") as audio_file:
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file
         )
+    return transcript.text.strip()
 
-        with open(output_path, "wb") as f:
-            for chunk in response.iter_bytes():
+# ================= TTS（完全穩定版）=================
+def generate_tts_audio(text, output_path):
+    response = client.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice="alloy",
+        input=text
+    )
+
+    with open(output_path, "wb") as f:
+        for chunk in response.iter_bytes():
+            if isinstance(chunk, bytes):
                 f.write(chunk)
-
-    except Exception as e:
-        print("🔥 TTS error:", str(e))
-        raise
-
-
-def get_mp3_duration_ms(file_path):
-    audio = MP3(file_path)
-    return int(audio.info.length * 1000)
-
 
 # ================= Cloudinary =================
 def upload_audio_to_cloudinary(file_path):
-    result = cloudinary.uploader.upload(
-        file_path,
-        resource_type="video"
-    )
+    result = cloudinary.uploader.upload(file_path, resource_type="video")
     return result["secure_url"]
 
+def get_mp3_duration_ms(file_path):
+    return int(MP3(file_path).info.length * 1000)
 
 # ================= 回覆 =================
 def reply_text(reply_token, text):
@@ -129,26 +100,7 @@ def reply_text(reply_token, text):
             )
         )
 
-
-# 🔥 保留 LINE 原始 mention（真正 tag）
-def reply_with_original_mention(reply_token, original_text, mention, translated_text):
-    new_text = original_text + "\n" + translated_text
-
-    with ApiClient(configuration) as api_client:
-        MessagingApi(api_client).reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[
-                    TextMessage(
-                        text=new_text,
-                        mention=mention
-                    )
-                ]
-            )
-        )
-
-
-def reply_text_and_audio(reply_token, text, audio_url, duration_ms):
+def reply_text_and_audio(reply_token, text, audio_url, duration):
     with ApiClient(configuration) as api_client:
         MessagingApi(api_client).reply_message(
             ReplyMessageRequest(
@@ -157,22 +109,20 @@ def reply_text_and_audio(reply_token, text, audio_url, duration_ms):
                     TextMessage(text=text),
                     AudioMessage(
                         original_content_url=audio_url,
-                        duration=duration_ms
+                        duration=duration
                     )
                 ]
             )
         )
 
-
-# ================= 音訊處理 =================
+# ================= 🔥 修正這裡（最關鍵） =================
 def save_line_audio(audio_content, temp_audio):
-    if hasattr(audio_content, "data"):
-        temp_audio.write(audio_content.data)
-    else:
+    try:
         for chunk in audio_content:
-            if chunk:
+            if isinstance(chunk, bytes):
                 temp_audio.write(chunk)
-
+    except Exception as e:
+        print("🔥 save_line_audio error:", e)
 
 # ================= Webhook =================
 @app.route("/callback", methods=["POST"])
@@ -187,50 +137,23 @@ def callback():
 
     return "OK"
 
-
-# ================= 文字處理 =================
+# ================= 文字 =================
 @handler.add(MessageEvent, message=TextMessageContent)
-def handle_text_message(event):
+def handle_text(event):
     try:
-        user_text = event.message.text.strip()
-
-        if not user_text:
-            return
-
-        print("收到訊息:", user_text)
-
-        mention = getattr(event.message, "mention", None)
-
-        translated = translate_text(user_text)
-
-        if mention:
-            reply_with_original_mention(
-                event.reply_token,
-                user_text,
-                mention,
-                translated
-            )
-        else:
-            reply_text(event.reply_token, translated)
-
+        text = event.message.text
+        translated = translate_text(text)
+        reply_text(event.reply_token, translated)
     except Exception as e:
-        print("🔥 Text error:", str(e))
         reply_text(event.reply_token, f"錯誤：{str(e)}")
 
-
-# ================= 語音處理 =================
+# ================= 語音 =================
 @handler.add(MessageEvent, message=AudioMessageContent)
-def handle_audio_message(event):
+def handle_audio(event):
     temp_audio_path = None
     tts_path = None
 
     try:
-        duration_ms = getattr(event.message, "duration", 0)
-
-        if duration_ms and duration_ms >= MAX_AUDIO_DURATION_MS:
-            reply_text(event.reply_token, "語音太長")
-            return
-
         with ApiClient(configuration) as api_client:
             blob_api = MessagingApiBlob(api_client)
             audio_content = blob_api.get_message_content(event.message.id)
@@ -239,9 +162,8 @@ def handle_audio_message(event):
                 save_line_audio(audio_content, temp_audio)
                 temp_audio_path = temp_audio.name
 
-        transcript_text = transcribe_audio(temp_audio_path)
-
-        translated = translate_text(transcript_text)
+        text = transcribe_audio(temp_audio_path)
+        translated = translate_text(text)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_tts:
             tts_path = temp_tts.name
@@ -249,31 +171,23 @@ def handle_audio_message(event):
         generate_tts_audio(translated, tts_path)
 
         duration = get_mp3_duration_ms(tts_path)
-        audio_url = upload_audio_to_cloudinary(tts_path)
+        url = upload_audio_to_cloudinary(tts_path)
 
-        reply_text_and_audio(
-            event.reply_token,
-            translated,
-            audio_url,
-            duration
-        )
+        reply_text_and_audio(event.reply_token, translated, url, duration)
 
     except Exception as e:
-        print("🔥 Audio error:", str(e))
+        print("🔥 Audio error:", e)
         reply_text(event.reply_token, f"語音錯誤：{str(e)}")
 
     finally:
         if temp_audio_path and os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
-
         if tts_path and os.path.exists(tts_path):
             os.remove(tts_path)
 
-
 @app.route("/")
 def home():
-    return "LINE Translate Bot Running!"
-
+    return "OK"
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    app.run()
