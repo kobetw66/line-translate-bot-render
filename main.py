@@ -112,7 +112,7 @@ nenek 固定翻譯為「阿嬤」
 
 {text}
 """
-else:
+    else:
     prompt = f"""
 你是台灣家庭照護印尼語翻譯助手。
 
