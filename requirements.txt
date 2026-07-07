@@ -6,4 +6,4 @@ gunicorn
 cloudinary
 mutagen
 gtts
-opencc
+opencc-python-reimplemented
