@@ -1,1 +1,36 @@
+{
+  "family": {
+    "kakek": "阿公",
+    "nenek": "阿嬤",
+    "bapak": "爸爸",
+    "ibu": "媽媽"
+  },
 
+  "care": {
+    "jatuh": "跌倒",
+    "terjatuh": "跌倒",
+    "luka": "受傷",
+    "sakit": "不舒服/疼痛",
+    "ganti popok": "換尿布",
+    "minum obat": "吃藥",
+    "mandi": "洗澡",
+    "makan": "吃飯",
+    "tidur": "睡覺"
+  },
+
+  "body": {
+    "kepala": "頭",
+    "pipi": "臉頰",
+    "mata": "眼睛",
+    "kaki": "腳",
+    "tangan": "手",
+    "pinggang": "腰"
+  },
+
+  "rules": [
+    "這是台灣家庭照護情境",
+    "翻譯使用自然繁體中文",
+    "不可增加原文沒有的事件",
+    "跌倒、受傷、吃藥訊息要特別保守"
+  ]
+}
