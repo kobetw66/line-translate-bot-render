@@ -1,5 +1,6 @@
 import os
 import tempfile
+import json
 from flask import Flask, request, abort
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -28,6 +29,22 @@ from linebot.v3.exceptions import InvalidSignatureError
 
 load_dotenv()
 
+def load_care_dictionary():
+    try:
+        with open(
+            "care_dictionary.json",
+            "r",
+            encoding="utf-8"
+        ) as f:
+            return json.load(f)
+
+    except Exception as e:
+        print("Care dictionary error:", e)
+        return {}
+
+
+CARE_DICT = load_care_dictionary()
+
 app = Flask(__name__)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -48,18 +65,24 @@ def is_chinese(text):
 # ================= 翻譯（乾淨輸出）=================
 def translate_text(text):
     if is_chinese(text):
-        prompt = f"""
-你是翻譯機。
-請將以下中文翻譯成自然的印尼文。
+prompt = f"""
+你是台灣家庭照護印尼語翻譯助手。
+
+請根據以下家庭詞庫理解：
+
+{CARE_DICT}
 
 規則：
-1. 只輸出翻譯結果
-2. 不要加「翻譯是」
-3. 不要加引號
-4. 不要解釋
-5. 保持簡潔自然
+
+1. 印尼文翻譯成自然繁體中文。
+2. 中文翻譯成印尼看護容易理解的口語。
+3. 不逐字翻譯。
+4. 不自行增加原文沒有的事情。
+5. 跌倒、受傷、吃藥資訊要保持原意。
+6. 不要加入解釋。
 
 內容：
+
 {text}
 """
     else:
