@@ -65,7 +65,7 @@ def is_chinese(text):
 # ================= 翻譯（乾淨輸出）=================
 def translate_text(text):
     if is_chinese(text):
-prompt = f"""
+        prompt = f"""
 你是台灣家庭照護印尼語翻譯助手。
 
 重要設定：
