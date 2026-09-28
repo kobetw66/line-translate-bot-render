@@ -1,25 +1,35 @@
-AI Care Translator V3
+AI Care Translator V3.1
 
-基礎：
-- 原本已測試成功版本
+加入三語自動路由：
 
-保留：
-- LINE文字翻譯
-- Whisper語音辨識
-- Google TTS
-- Cloudinary語音回傳
-- 家庭照護詞庫
+detect_language(text)
 
-新增設計方向：
-1. 三語自動路由
-   - 中文 -> 印尼文
-   - 印尼文 -> 繁體中文
-   - 英文 -> 繁體中文
+規則：
+1. 中文：
+   中文字元判斷
+   中文 -> 印尼文
 
-2. AI照護事件分析
-   - 跌倒
-   - 受傷
-   - 吃藥
-   - 發燒
+2. 印尼文：
+   kakek, nenek, saya, sudah, tidak, tolong, obat, jatuh 等
+   印尼文 -> 台灣繁體中文
 
-3. LINE家庭通知與mention功能（後續接入）
+3. 英文：
+   其他拉丁文字句
+   英文 -> 台灣繁體中文
+
+translate_text() 改為：
+
+language = detect_language(text)
+
+if language == "zh":
+    中文翻譯印尼文
+elif language == "id":
+    印尼翻譯繁中
+else:
+    英文翻譯繁中
+
+完成後測試：
+測試 -> Tes
+Saya sudah pergi -> 我已經離開了
+Can you help me open the door? -> 可以幫我開門嗎？
+請幫阿公吃藥 -> Tolong bantu kakek minum obat ya.
